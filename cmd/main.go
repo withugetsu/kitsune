@@ -14,7 +14,7 @@ import (
 
 func main() {
 	password := flag.String("password", "", "specify the password for the client")
-	method := flag.String("method", ciphers.Method(0).String(), "specify the method for the client")
+	method := flag.String("method", "2022-blake3-aes-128-gcm", "specify the method for the client")
 	remoteAddr := flag.String("remoteAddr", "", "specify the Shadowsocks server address")
 	localAddr := flag.String("localAddr", "127.0.0.1:1080", "specify the TCP listening address for the client")
 
