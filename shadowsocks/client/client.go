@@ -3,6 +3,7 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"os"
@@ -30,7 +31,7 @@ func NewClient(ctx context.Context, key []byte, cm ciphers.Method) *Client {
 		key: key,
 		cm:  cm,
 		logger: slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: slog.LevelDebug,
 		})),
 	}
 }
@@ -124,8 +125,14 @@ func (c *Client) handleTCP(socks5Conn net.Conn, targetAddr []byte) error {
 		_ = ssConn.Close()
 		return err
 	}
+	err = sc.Stream(socks5Conn)
+	if err != nil {
+		c.logger.Warn(fmt.Sprintf("shadow stream [%s <-> %s] quit with error", socks5Conn.RemoteAddr().String(), ssConn.RemoteAddr().String()), "error", err)
+	} else {
+		c.logger.Debug(fmt.Sprintf("shadow stream [%s <-> %s] quit without error", socks5Conn.RemoteAddr().String(), ssConn.RemoteAddr().String()))
+	}
 
-	return sc.Stream(socks5Conn)
+	return nil
 }
 
 func (c *Client) handleUDP(conn net.Conn, targetAddr []byte) error {
