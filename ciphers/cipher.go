@@ -14,13 +14,13 @@ var (
 	ErrSaltSize = errors.New("ciphers: invalid salt size")
 )
 
-const (
-	AEAD2022BLAKE3AES128GCM Method = iota
-	AEAD2022BLAKE3AES256GCM
-	AEAD2022BLAKE3Chacha20Poly1305
-)
+type Method string
 
-type Method int
+const (
+	AEAD2022BLAKE3AES128GCM        Method = "2022-blake3-aes-128-gcm"
+	AEAD2022BLAKE3AES256GCM        Method = "2022-blake3-aes-256-gcm"
+	AEAD2022BLAKE3Chacha20Poly1305 Method = "2022-blake3-chacha20poly1305"
+)
 
 func (m Method) KeySize() (int, error) {
 	switch m {
@@ -33,21 +33,8 @@ func (m Method) KeySize() (int, error) {
 	}
 }
 
-func (m Method) String() string {
-	switch m {
-	case AEAD2022BLAKE3AES128GCM:
-		return "2022-blake3-aes-128-gcm"
-	case AEAD2022BLAKE3AES256GCM:
-		return "2022-blake3-aes-256-gcm"
-	case AEAD2022BLAKE3Chacha20Poly1305:
-		return "2022-blake3-chacha20-poly1305,"
-	default:
-		return "unknown"
-	}
-}
-
-func ParseMethod(s string) (Method, error) {
-	switch s {
+func ParseMethod(method string) (Method, error) {
+	switch method {
 	case "2022-blake3-aes-128-gcm":
 		return AEAD2022BLAKE3AES128GCM, nil
 	case "2022-blake3-aes-256-gcm":
@@ -55,7 +42,7 @@ func ParseMethod(s string) (Method, error) {
 	case "2022-blake3-chacha20-poly1305":
 		return AEAD2022BLAKE3Chacha20Poly1305, nil
 	default:
-		return Method(-1), ErrKeySize
+		return "unknown", ErrKeySize
 	}
 }
 
@@ -135,6 +122,14 @@ func newCipherWithSalt(m Method, key []byte, salt []byte, keySize int) (*Cipher,
 func (c *Cipher) Seal(dst, plaintext []byte) []byte {
 	dst = c.AEAD.Seal(dst, c.counter.Nonce(), plaintext, nil)
 	c.counter.Count()
+	return dst
+}
+
+func (c *Cipher) Seals(dst []byte, plaintexts ...[]byte) []byte {
+	for _, plaintext := range plaintexts {
+		dst = c.AEAD.Seal(dst, c.counter.Nonce(), plaintext, nil)
+		c.counter.Count()
+	}
 	return dst
 }
 
