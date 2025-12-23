@@ -1,4 +1,4 @@
-# kitune is a lightweight and efficient implementation of the Shadowsocks protocol written in Go.
+# kitsune is a lightweight and efficient implementation of the Shadowsocks protocol written in Go.
 
 ## TODO LIST
 * support UDP relay.
