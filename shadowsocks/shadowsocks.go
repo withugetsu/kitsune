@@ -6,9 +6,7 @@ import (
 	"errors"
 	"io"
 	"net"
-	"os"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/withugetsu/kitsune/ciphers"
@@ -38,35 +36,33 @@ type ShadowConn struct {
 	readBuf  []byte
 	writeBuf []byte
 	key      []byte
-	ct       ciphers.Method
+	cm       ciphers.Method
 
-	doReadServerHandshake func() error
-	serverHandshakeBuf    []byte
+	serverHandshakeBuf []byte
 }
 
-func NewShadowConn(conn net.Conn, key []byte, ct ciphers.Method) (*ShadowConn, error) {
-	enCipher, err := ciphers.NewCipher(ct, key)
+func NewShadowConn(conn net.Conn, key []byte, cm ciphers.Method) (*ShadowConn, error) {
+	enCipher, err := ciphers.NewCipher(cm, key)
 	if err != nil {
 		return nil, err
 	}
 
 	bufSize := 2 + enCipher.Overhead() + MaxPayloadLength + enCipher.Overhead()
 	sc := &ShadowConn{
-		Conn:     conn,
-		EnCipher: enCipher,
-		readBuf:  make([]byte, bufSize),
-		writeBuf: make([]byte, bufSize),
-		key:      key,
-		ct:       ct,
+		Conn:               conn,
+		EnCipher:           enCipher,
+		readBuf:            make([]byte, 0, bufSize),
+		writeBuf:           make([]byte, 0, bufSize),
+		key:                key,
+		cm:                 cm,
+		serverHandshakeBuf: make([]byte, 0, bufSize),
 	}
-
-	sc.doReadServerHandshake = sync.OnceValue(sc.readServerHandshake)
 
 	return sc, nil
 }
 
 func (sc *ShadowConn) Read(p []byte) (n int, err error) {
-	if err = sc.doReadServerHandshake(); err != nil {
+	if err = sync.OnceValue(sc.readServerHandshake)(); err != nil {
 		return 0, err
 	}
 
@@ -103,13 +99,11 @@ func (sc *ShadowConn) Read(p []byte) (n int, err error) {
 }
 
 func (sc *ShadowConn) Write(p []byte) (n int, err error) {
-
 	buf := sc.writeBuf[:0]
-	buf = sc.EnCipher.Seal(buf, []byte{byte(len(p) >> 8), byte(len(p))})
-	buf = sc.EnCipher.Seal(buf, p)
+	buf = sc.EnCipher.Seals(buf, []byte{byte(len(p) >> 8), byte(len(p))}, p)
 
-	if _, err = sc.Conn.Write(buf); err != nil {
-		return 0, err
+	if n, err = sc.Conn.Write(buf); err != nil {
+		return n, err
 	}
 	return len(p), nil
 }
@@ -118,20 +112,19 @@ func (sc *ShadowConn) readServerHandshake() error {
 	respSaltLen := len(sc.EnCipher.Salt)
 	respFLHLen := 1 + 8 + respSaltLen + 2 + sc.EnCipher.Overhead()
 
-	respBuf := make([]byte, respSaltLen+respFLHLen)
-	if _, err := io.ReadFull(sc.Conn, respBuf); err != nil {
+	if _, err := io.ReadFull(sc.Conn, sc.readBuf[:respSaltLen+respFLHLen]); err != nil {
 		return err
 	}
 
-	respSalt := respBuf[:respSaltLen]
-	deCipher, err := ciphers.NewCipherWithSalt(sc.ct, sc.key, respSalt)
+	respSalt := sc.readBuf[:respSaltLen]
+	deCipher, err := ciphers.NewCipherWithSalt(sc.cm, sc.key, respSalt)
 	if err != nil {
 		return err
 	}
 
 	sc.DeCipher = deCipher
 
-	header, err := sc.DeCipher.Open(nil, respBuf[respSaltLen:])
+	header, err := sc.DeCipher.Open(sc.readBuf[respSaltLen:respSaltLen], sc.readBuf[respSaltLen:respSaltLen+respFLHLen])
 	if err != nil {
 		return err
 	}
@@ -153,19 +146,16 @@ func (sc *ShadowConn) readServerHandshake() error {
 	}
 
 	payloadLen := binary.BigEndian.Uint16(header[1+8+respSaltLen:])
-
 	if payloadLen > 0 {
-		payloadBuf := make([]byte, int(payloadLen)+sc.DeCipher.Overhead())
-		if _, err = io.ReadFull(sc.Conn, payloadBuf); err != nil {
+		buf := sc.serverHandshakeBuf[:int(payloadLen)+sc.DeCipher.Overhead()]
+		if _, err = io.ReadFull(sc.Conn, buf); err != nil {
 			return err
 		}
 
-		payload, err := sc.DeCipher.Open(nil, payloadBuf)
+		sc.serverHandshakeBuf, err = sc.DeCipher.Open(buf[:0], buf)
 		if err != nil {
 			return err
 		}
-
-		sc.serverHandshakeBuf = payload
 	}
 
 	return nil
@@ -223,23 +213,5 @@ func (sc *ShadowConn) Stream(socks5Conn net.Conn) error {
 		errChan <- err
 	}()
 
-	return filterError(<-errChan)
-}
-
-func filterError(err error) error {
-	if err == nil || err == io.EOF || errors.Is(err, net.ErrClosed) {
-		return nil
-	}
-
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		var syscallErr *os.SyscallError
-		if errors.As(opErr.Err, &syscallErr) {
-			if errors.Is(syscallErr.Err, syscall.ECONNRESET) || errors.Is(syscallErr.Err, syscall.EPIPE) {
-				return nil
-			}
-		}
-	}
-
-	return err
+	return <-errChan
 }
