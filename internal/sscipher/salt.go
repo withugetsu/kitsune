@@ -1,4 +1,4 @@
-package ciphers
+package sscipher
 
 import (
 	"context"
@@ -7,17 +7,11 @@ import (
 	"time"
 )
 
-func NewSalt(ct Method) ([]byte, error) {
-	keySize, err := ct.KeySize()
-	if err != nil {
+func NewSalt(size int) ([]byte, error) {
+	salt := make([]byte, size)
+	if _, err := rand.Read(salt); err != nil {
 		return nil, err
 	}
-	
-	salt := make([]byte, keySize)
-	if _, err = rand.Read(salt); err != nil {
-		return nil, err
-	}
-	
 	return salt, nil
 }
 

@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 	"time"
-
-	"github.com/withugetsu/kitsune/tool"
+	
+	"github.com/withugetsu/kitsune/internal/tool"
 )
 
 var (
@@ -41,34 +41,34 @@ const (
 	ReplyFiledCommandNotSupported ReplyFiled = 0x07
 )
 
-func Handshake(conn net.Conn) (cmd Command, addr []byte, err error) {
+func Handshake(conn io.ReadWriter) (cmd Command, addr []byte, err error) {
 	buf, err := tool.ReadExact(conn, 2)
 	if err != nil {
 		return
 	}
-
+	
 	buf, err = tool.ReadExact(conn, int(buf[1]))
 	if err != nil {
 		return
 	}
-
+	
 	if _, err = conn.Write([]byte{0x05, 0x00}); err != nil {
 		return
 	}
-
+	
 	buf, err = tool.ReadExact(conn, 4)
 	if err != nil {
 		return
 	}
-
+	
 	cmd = Command(buf[1])
 	atyp := buf[3]
-
+	
 	if cmd != CommandConnect && cmd != CommandUDPAssociate {
 		_ = ReplyTo(conn, 0x07, EmptyAddr())
 		return cmd, nil, ErrCommandNotSupported
 	}
-
+	
 	switch Atyp(atyp) {
 	case AtypIPV4:
 		buf = make([]byte, 1+net.IPv4len+2)
@@ -102,7 +102,7 @@ func Handshake(conn net.Conn) (cmd Command, addr []byte, err error) {
 	}
 }
 
-func ReplyTo(conn net.Conn, rf ReplyFiled, addr *Addr) error {
+func ReplyTo(conn io.Writer, rf ReplyFiled, addr *Addr) error {
 	if addr == nil {
 		addr = EmptyAddr()
 	}
@@ -112,16 +112,16 @@ func ReplyTo(conn net.Conn, rf ReplyFiled, addr *Addr) error {
 
 func WaitForInitialPayload(conn net.Conn, maxPayload int) ([]byte, error) {
 	_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-
+	
 	buf := make([]byte, maxPayload)
 	n, err := conn.Read(buf)
-
+	
 	_ = conn.SetReadDeadline(time.Time{})
-
+	
 	if n > 0 {
 		return buf[:n], nil
 	}
-
+	
 	if err != nil {
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
@@ -129,6 +129,6 @@ func WaitForInitialPayload(conn net.Conn, maxPayload int) ([]byte, error) {
 		}
 		return nil, err
 	}
-
+	
 	return nil, nil
 }
