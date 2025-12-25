@@ -12,13 +12,9 @@ import (
 	"time"
 	
 	"github.com/withugetsu/kitsune/internal/shadowsocks"
-	socks6 "github.com/withugetsu/kitsune/internal/socks5"
+	"github.com/withugetsu/kitsune/internal/socks5"
 	"github.com/withugetsu/kitsune/internal/sscipher"
 	"github.com/withugetsu/kitsune/internal/tool"
-)
-
-var (
-	ErrRemoteSSNil = errors.New("shadowsocks: remote SS address is nil")
 )
 
 type Client struct {
@@ -79,29 +75,29 @@ func (c *Client) Serve(addr string) error {
 func (c *Client) handleConnection(socks5Conn net.Conn) error {
 	defer socks5Conn.Close()
 	
-	cmd, dstAddr, err := socks6.Handshake(socks5Conn)
+	cmd, dstAddr, err := socks5.Handshake(socks5Conn)
 	if err != nil {
 		return err
 	}
 	
-	ta, err := socks6.NewAddrFromBytes(dstAddr)
+	ta, err := socks5.NewAddrFromBytes(dstAddr)
 	if err != nil {
 		return err
 	}
 	c.logger.Debug("socks5 handshake completed", "cmd", cmd.String(), "dstAddr", ta.String(), "srcAddr", socks5Conn.RemoteAddr().String())
 	
 	switch cmd {
-	case socks6.CommandConnect:
+	case socks5.CommandConnect:
 		return c.handleTCP(socks5Conn, dstAddr)
-	case socks6.CommandUDPAssociate:
+	case socks5.CommandUDPAssociate:
 		return c.handleUDP(socks5Conn, dstAddr)
 	default:
-		return socks6.ErrCommandNotSupported
+		return socks5.ErrCommandNotSupported
 	}
 }
 
 func (c *Client) handleTCP(socks5Conn net.Conn, targetAddr []byte) error {
-	if err := socks6.ReplyTo(socks5Conn, socks6.ReplyFiledSuccess, socks6.EmptyAddr()); err != nil {
+	if err := socks5.ReplyTo(socks5Conn, socks5.ReplyFiledSuccess, socks5.EmptyAddr()); err != nil {
 		return err
 	}
 	
@@ -110,7 +106,7 @@ func (c *Client) handleTCP(socks5Conn net.Conn, targetAddr []byte) error {
 		return err
 	}
 	
-	initialPayload, err := socks6.WaitForInitialPayload(socks5Conn, shadowsocks.MaxInitialPayloadLength)
+	initialPayload, err := socks5.WaitForInitialPayload(socks5Conn, shadowsocks.MaxInitialPayloadLength)
 	if err != nil {
 		return err
 	}
@@ -131,7 +127,7 @@ func (c *Client) handleTCP(socks5Conn net.Conn, targetAddr []byte) error {
 }
 
 func (c *Client) handleUDP(conn net.Conn, targetAddr []byte) error {
-	return socks6.ReplyTo(conn, socks6.ReplyFiledCommandNotSupported, nil)
+	return socks5.ReplyTo(conn, socks5.ReplyFiledCommandNotSupported, nil)
 }
 
 func Handshake(sc *shadowsocks.Conn, targetAddr, initialPayload []byte) ([]byte, error) {

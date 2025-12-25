@@ -6,7 +6,7 @@ import (
 	"net"
 	"sync"
 	
-	sscipher2 "github.com/withugetsu/kitsune/internal/sscipher"
+	"github.com/withugetsu/kitsune/internal/sscipher"
 )
 
 var (
@@ -26,13 +26,13 @@ const (
 
 type Conn struct {
 	Conn     net.Conn
-	EnCipher *sscipher2.Cipher
-	DeCipher *sscipher2.Cipher
+	EnCipher *sscipher.Cipher
+	DeCipher *sscipher.Cipher
 	
 	Pool sync.Pool
 }
 
-func NewConn(conn net.Conn, enCipher, deCipher *sscipher2.Cipher) *Conn {
+func NewConn(conn net.Conn, enCipher, deCipher *sscipher.Cipher) *Conn {
 	bufSize := 2 + enCipher.Overhead() + MaxPayloadLength + enCipher.Overhead()
 	return &Conn{
 		Conn:     conn,
@@ -47,12 +47,12 @@ func NewConn(conn net.Conn, enCipher, deCipher *sscipher2.Cipher) *Conn {
 	}
 }
 
-func NewClientConn(conn net.Conn, key []byte, cm sscipher2.Method) (*Conn, error) {
-	enSalt, err := sscipher2.NewSalt(len(key))
+func NewClientConn(conn net.Conn, key []byte, cm sscipher.Method) (*Conn, error) {
+	enSalt, err := sscipher.NewSalt(len(key))
 	if err != nil {
 		return nil, err
 	}
-	enCipher, err := sscipher2.NewCipher(key, enSalt, cm)
+	enCipher, err := sscipher.NewCipher(key, enSalt, cm)
 	if err != nil {
 		return nil, err
 	}
@@ -60,12 +60,12 @@ func NewClientConn(conn net.Conn, key []byte, cm sscipher2.Method) (*Conn, error
 	return NewConn(conn, enCipher, nil), nil
 }
 
-func NewServerConn(conn net.Conn, key []byte, cm sscipher2.Method, clientSalt []byte) (*Conn, error) {
-	deCipher, err := sscipher2.NewCipher(key, clientSalt, cm)
+func NewServerConn(conn net.Conn, key []byte, cm sscipher.Method, clientSalt []byte) (*Conn, error) {
+	deCipher, err := sscipher.NewCipher(key, clientSalt, cm)
 	if err != nil {
 		return nil, err
 	}
-	salt, err := sscipher2.NewSalt(len(key))
+	salt, err := sscipher.NewSalt(len(key))
 	if err != nil {
 		return nil, err
 	}
