@@ -20,7 +20,7 @@ const (
 	HeaderTypeServerStream HeaderType = 0x01
 	
 	MaxPaddingLength        = 900
-	MaxInitialPayloadLength = 0xFFFF
+	MaxInitialPayloadLength = 8192
 	MaxPayloadLength        = 0xFFFF
 )
 
@@ -150,29 +150,29 @@ func (c *Conn) Overhead() int {
 	return c.EnCipher.Overhead()
 }
 
-func Stream(conn *Conn, socks5Conn net.Conn, payload []byte) error {
-	defer conn.Close()
-	defer socks5Conn.Close()
+func Stream(cc *Conn, srcConn net.Conn, payload []byte) error {
+	defer cc.Close()
+	defer srcConn.Close()
 	
 	errChan := make(chan error, 2)
 	bufSize := MaxPayloadLength
 	
 	go func() {
 		buf := make([]byte, bufSize)
-		_, err := io.CopyBuffer(conn, socks5Conn, buf)
+		_, err := io.CopyBuffer(cc, srcConn, buf)
 		errChan <- err
 	}()
 	
 	go func() {
 		if len(payload) > 0 {
-			if _, err := socks5Conn.Write(payload); err != nil {
+			if _, err := srcConn.Write(payload); err != nil {
 				errChan <- err
 				return
 			}
 		}
 		
 		buf := make([]byte, bufSize)
-		_, err := io.CopyBuffer(socks5Conn, conn, buf)
+		_, err := io.CopyBuffer(srcConn, cc, buf)
 		errChan <- err
 	}()
 	

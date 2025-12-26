@@ -65,9 +65,7 @@ func (c *Client) Serve(addr string) error {
 		}
 		
 		go func(socks5Conn net.Conn) {
-			if err := c.handleConnection(socks5Conn); err != nil {
-				c.logger.Error("handle connection error", "error", err)
-			}
+			_ = c.handleConnection(socks5Conn)
 		}(conn)
 	}
 }
@@ -75,63 +73,80 @@ func (c *Client) Serve(addr string) error {
 func (c *Client) handleConnection(socks5Conn net.Conn) error {
 	defer socks5Conn.Close()
 	
+	log := c.logger.With("src", socks5Conn.RemoteAddr().String())
+	
 	cmd, dstAddr, err := socks5.Handshake(socks5Conn)
 	if err != nil {
+		log.Error("socks5 handshake failed", "error", err)
 		return err
 	}
 	
 	ta, err := socks5.NewAddrFromBytes(dstAddr)
 	if err != nil {
+		log.Error("parse target address failed", "error", err)
 		return err
 	}
-	c.logger.Debug("socks5 handshake completed", "cmd", cmd.String(), "dstAddr", ta.String(), "srcAddr", socks5Conn.RemoteAddr().String())
+	
+	log = log.With("dst", ta.String())
+	log.Debug("socks5 request", "cmd", cmd.String())
 	
 	switch cmd {
 	case socks5.CommandConnect:
-		return c.handleTCP(socks5Conn, dstAddr)
+		return c.handleTCP(socks5Conn, dstAddr, log)
 	case socks5.CommandUDPAssociate:
-		return c.handleUDP(socks5Conn, dstAddr)
+		return c.handleUDP(socks5Conn, dstAddr, log)
 	default:
 		return socks5.ErrCommandNotSupported
 	}
 }
 
-func (c *Client) handleTCP(socks5Conn net.Conn, targetAddr []byte) error {
-	if err := socks5.ReplyTo(socks5Conn, socks5.ReplyFiledSuccess, socks5.EmptyAddr()); err != nil {
+func (c *Client) handleTCP(srcConn net.Conn, targetAddr []byte, log *slog.Logger) (err error) {
+	start := time.Now()
+	defer func() {
+		if err != nil {
+			log.Error("connection closed", "duration", time.Since(start), "error", err)
+		} else {
+			log.Debug("connection closed", "duration", time.Since(start))
+		}
+	}()
+	
+	if err = socks5.ReplyTo(srcConn, socks5.ReplyFiledSuccess, socks5.EmptyAddr()); err != nil {
 		return err
 	}
 	
-	ssConn, err := net.Dial("tcp", c.RemoteSSAddr(socks5Conn))
+	dstAddr := c.RemoteSSAddr(srcConn)
+	dstConn, err := net.Dial("tcp", dstAddr)
 	if err != nil {
 		return err
 	}
+	log.Debug("connected to remote", "addr", dstAddr)
 	
-	initialPayload, err := socks5.WaitForInitialPayload(socks5Conn, shadowsocks.MaxInitialPayloadLength)
+	shadowConn, err := shadowsocks.NewClientConn(dstConn, c.key, c.cm)
 	if err != nil {
+		_ = dstConn.Close()
 		return err
 	}
 	
-	sc, err := shadowsocks.NewClientConn(ssConn, c.key, c.cm)
+	payload, err := Handshake(shadowConn, srcConn, targetAddr)
 	if err != nil {
-		_ = ssConn.Close()
+		_ = dstConn.Close()
 		return err
 	}
 	
-	payload, err := Handshake(sc, targetAddr, initialPayload)
-	if err != nil {
-		_ = ssConn.Close()
-		return err
-	}
-	
-	return shadowsocks.Stream(sc, socks5Conn, payload)
+	return shadowsocks.Stream(shadowConn, srcConn, payload)
 }
 
-func (c *Client) handleUDP(conn net.Conn, targetAddr []byte) error {
+func (c *Client) handleUDP(conn net.Conn, targetAddr []byte, log *slog.Logger) error {
 	return socks5.ReplyTo(conn, socks5.ReplyFiledCommandNotSupported, nil)
 }
 
-func Handshake(sc *shadowsocks.Conn, targetAddr, initialPayload []byte) ([]byte, error) {
-	if err := writeClientHandshake(sc, targetAddr, initialPayload); err != nil {
+func Handshake(sc *shadowsocks.Conn, socks5Conn net.Conn, targetAddr []byte) ([]byte, error) {
+	initialPayload, err := waitForInitialPayload(socks5Conn, shadowsocks.MaxInitialPayloadLength)
+	if err != nil {
+		return nil, err
+	}
+	
+	if err = writeClientHandshake(sc, targetAddr, initialPayload); err != nil {
 		return nil, err
 	}
 	
@@ -141,6 +156,32 @@ func Handshake(sc *shadowsocks.Conn, targetAddr, initialPayload []byte) ([]byte,
 	}
 	
 	return payload, nil
+}
+
+func waitForInitialPayload(conn net.Conn, maxPayload int) ([]byte, error) {
+	if err := conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+		return nil, err
+	}
+	defer conn.SetReadDeadline(time.Time{})
+	
+	io.LimitReader(conn, int64(maxPayload))
+	
+	buf := make([]byte, maxPayload)
+	n, err := conn.Read(buf)
+	
+	if n > 0 {
+		return buf[:n], nil
+	}
+	
+	if err != nil {
+		var netErr net.Error
+		if errors.As(err, &netErr) && netErr.Timeout() {
+			return nil, nil
+		}
+		return nil, err
+	}
+	
+	return nil, nil
 }
 
 func readServerHandshake(sc *shadowsocks.Conn) ([]byte, error) {

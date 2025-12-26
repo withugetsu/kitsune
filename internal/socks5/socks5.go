@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"time"
 	
 	"github.com/withugetsu/kitsune/internal/tool"
 )
@@ -108,27 +107,4 @@ func ReplyTo(conn io.Writer, rf ReplyFiled, addr *Addr) error {
 	}
 	_, err := conn.Write(append([]byte{0x05, byte(rf), 0x00}, addr.Bytes()...))
 	return err
-}
-
-func WaitForInitialPayload(conn net.Conn, maxPayload int) ([]byte, error) {
-	_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
-	
-	buf := make([]byte, maxPayload)
-	n, err := conn.Read(buf)
-	
-	_ = conn.SetReadDeadline(time.Time{})
-	
-	if n > 0 {
-		return buf[:n], nil
-	}
-	
-	if err != nil {
-		var netErr net.Error
-		if errors.As(err, &netErr) && netErr.Timeout() {
-			return nil, nil
-		}
-		return nil, err
-	}
-	
-	return nil, nil
 }

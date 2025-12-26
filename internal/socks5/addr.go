@@ -9,6 +9,7 @@ import (
 
 var (
 	ErrAddressTypeNotSupported = errors.New("socks5: address type not supported")
+	ErrAddressLength           = errors.New("socks5: invalid address length")
 )
 
 type Atyp byte
@@ -27,52 +28,42 @@ type Addr struct {
 
 func NewAddrFromBytes(b []byte) (*Addr, error) {
 	if len(b) < 1 {
-		return nil, errors.New("invalid address length")
+		return nil, ErrAddressLength
 	}
 	
 	atyp := Atyp(b[0])
 	
 	switch atyp {
-	case AtypIPV4:
-		if len(b) < 1+net.IPv4len+2 {
-			return nil, errors.New("short buffer for ipv4")
+	case AtypIPV4, AtypIPV6:
+		l := 0
+		if atyp == AtypIPV4 {
+			l = net.IPv4len
+		} else {
+			l = net.IPv6len
 		}
 		
-		addr := make([]byte, net.IPv4len)
-		copy(addr, b[1:1+net.IPv4len])
+		if len(b) < 1+l+2 {
+			return nil, ErrAddressLength
+		}
 		
-		port := binary.BigEndian.Uint16(b[1+net.IPv4len:])
+		addr := make([]byte, l)
+		copy(addr, b[1:1+l])
+		
+		port := binary.BigEndian.Uint16(b[1+l:])
 		
 		return &Addr{
 			ATYP: atyp,
 			Addr: addr,
 			Port: port,
 		}, nil
-	
-	case AtypIPV6:
-		if len(b) < 1+net.IPv6len+2 {
-			return nil, errors.New("short buffer for ipv6")
-		}
-		
-		addr := make([]byte, net.IPv6len)
-		copy(addr, b[1:1+net.IPv6len])
-		
-		port := binary.BigEndian.Uint16(b[1+net.IPv6len:])
-		
-		return &Addr{
-			ATYP: atyp,
-			Addr: addr,
-			Port: port,
-		}, nil
-	
 	case AtypDomainName:
 		if len(b) < 2 {
-			return nil, errors.New("short buffer for domain length")
+			return nil, ErrAddressLength
 		}
 		
 		domainLen := int(b[1])
 		if len(b) < 1+1+domainLen+2 {
-			return nil, errors.New("short buffer for domain")
+			return nil, ErrAddressLength
 		}
 		
 		addr := make([]byte, domainLen)
