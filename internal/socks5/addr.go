@@ -3,6 +3,7 @@ package socks5
 import (
 	"encoding/binary"
 	"errors"
+	"io"
 	"net"
 	"strconv"
 )
@@ -26,59 +27,105 @@ type Addr struct {
 	Port uint16
 }
 
-func NewAddrFromBytes(b []byte) (*Addr, error) {
-	if len(b) < 1 {
-		return nil, ErrAddressLength
+func ReadAddrFrom(r io.Reader) (*Addr, error) {
+	b := make([]byte, 1)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, err
 	}
-	
+
 	atyp := Atyp(b[0])
-	
+	var addr []byte
+
 	switch atyp {
-	case AtypIPV4, AtypIPV6:
-		l := 0
-		if atyp == AtypIPV4 {
-			l = net.IPv4len
-		} else {
-			l = net.IPv6len
+	case AtypIPV4:
+		addr = make([]byte, net.IPv4len)
+		if _, err := io.ReadFull(r, addr); err != nil {
+			return nil, err
 		}
-		
-		if len(b) < 1+l+2 {
-			return nil, ErrAddressLength
+	case AtypIPV6:
+		addr = make([]byte, net.IPv6len)
+		if _, err := io.ReadFull(r, addr); err != nil {
+			return nil, err
 		}
-		
-		addr := make([]byte, l)
-		copy(addr, b[1:1+l])
-		
-		port := binary.BigEndian.Uint16(b[1+l:])
-		
-		return &Addr{
-			ATYP: atyp,
-			Addr: addr,
-			Port: port,
-		}, nil
 	case AtypDomainName:
-		if len(b) < 2 {
-			return nil, ErrAddressLength
+		if _, err := io.ReadFull(r, b); err != nil {
+			return nil, err
 		}
-		
-		domainLen := int(b[1])
-		if len(b) < 1+1+domainLen+2 {
-			return nil, ErrAddressLength
+		domainLen := int(b[0])
+		addr = make([]byte, domainLen)
+		if _, err := io.ReadFull(r, addr); err != nil {
+			return nil, err
 		}
-		
-		addr := make([]byte, domainLen)
-		copy(addr, b[2:2+domainLen])
-		
-		port := binary.BigEndian.Uint16(b[2+domainLen:])
-		
-		return &Addr{
-			ATYP: atyp,
-			Addr: addr,
-			Port: port,
-		}, nil
-	
 	default:
 		return nil, ErrAddressTypeNotSupported
+	}
+
+	portBuf := make([]byte, 2)
+	if _, err := io.ReadFull(r, portBuf); err != nil {
+		return nil, err
+	}
+
+	port := binary.BigEndian.Uint16(portBuf)
+
+	return &Addr{
+		ATYP: atyp,
+		Addr: addr,
+		Port: port,
+	}, nil
+}
+
+func ParseAddrFromString(s string) (*Addr, error) {
+	host, p, err := net.SplitHostPort(s)
+	if err != nil {
+		return nil, err
+	}
+
+	var addr []byte
+	var atyp Atyp
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		if len(host) > 0xFF {
+			return nil, ErrAddressLength
+		}
+		addr = []byte(host)
+		atyp = AtypDomainName
+	} else if ipv4 := ip.To4(); ipv4 != nil {
+		addr = ipv4
+		atyp = AtypIPV4
+	} else {
+		addr = ip.To16()
+		atyp = AtypIPV6
+	}
+
+	port, err := strconv.Atoi(p)
+	if err != nil {
+		return nil, err
+	}
+	return &Addr{
+		ATYP: atyp,
+		Addr: addr,
+		Port: uint16(port),
+	}, nil
+}
+
+func ParseAddrFromUDPAddr(addr *net.UDPAddr) *Addr {
+	if addr == nil {
+		return EmptyAddr()
+	}
+
+	if ip4 := addr.IP.To4(); ip4 != nil {
+		return &Addr{
+			ATYP: AtypIPV4,
+			Addr: ip4,
+			Port: uint16(addr.Port),
+		}
+	}
+
+	return &Addr{
+		ATYP: AtypIPV6,
+		Addr: addr.IP.To16(),
+		Port: uint16(addr.Port),
 	}
 }
 
@@ -87,9 +134,9 @@ func (a *Addr) Bytes() []byte {
 	if a.ATYP == AtypDomainName {
 		addrLen += 1
 	}
-	
+
 	buf := make([]byte, 1+addrLen+2)
-	
+
 	buf[0] = byte(a.ATYP)
 	if a.ATYP == AtypDomainName {
 		buf[1] = byte(len(a.Addr))
@@ -97,28 +144,24 @@ func (a *Addr) Bytes() []byte {
 	} else {
 		copy(buf[1:], a.Addr)
 	}
-	
+
 	binary.BigEndian.PutUint16(buf[1+addrLen:], a.Port)
 	return buf
 }
 
 func (a *Addr) String() string {
+	var host string
 	switch a.ATYP {
 	case AtypIPV4:
-		ip := net.IP(a.Addr).To4().String()
-		port := strconv.Itoa(int(a.Port))
-		return ip + ":" + port
+		host = net.IP(a.Addr).To4().String()
 	case AtypDomainName:
-		domain := string(a.Addr)
-		port := strconv.Itoa(int(a.Port))
-		return domain + ":" + port
+		host = string(a.Addr)
 	case AtypIPV6:
-		ip := net.IP(a.Addr).To16().String()
-		port := strconv.Itoa(int(a.Port))
-		return ip + ":" + port
+		host = net.IP(a.Addr).To16().String()
 	default:
 		return "unknown"
 	}
+	return net.JoinHostPort(host, strconv.Itoa(int(a.Port)))
 }
 
 func EmptyAddr() *Addr {
